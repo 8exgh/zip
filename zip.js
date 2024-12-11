@@ -3,80 +3,94 @@ function createZip(files) {
   const centralHeaderSignature = [0x50, 0x4b, 0x01, 0x02]; // Central directory signature
   const endOfCentralDirSignature = [0x50, 0x4b, 0x05, 0x06]; // End of central directory signature
 
-  const chunks = []; // For holding the ZIP file parts
+  const chunks = []; // To hold ZIP file parts
   const centralDirectory = [];
-  let offset = 0; // Track the byte offset for central directory
+  let offset = 0; // Byte offset for central directory
 
-  files.forEach(({ name, content }, index) => {
-    const encoder = new TextEncoder();
-    const nameBytes = encoder.encode(name);
-    const contentBytes = encoder.encode(content);
+  function calculateCRC32(data) {
+    let crc = 0xffffffff;
+    for (let byte of data) {
+      crc ^= byte;
+      for (let i = 0; i < 8; i++) {
+        crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+      }
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  files.forEach(({ name, content }) => {
+    const nameBytes = new TextEncoder().encode(name);
+    const contentBytes = content instanceof Uint8Array ? content : new Uint8Array(content);
+
+    const crc32 = calculateCRC32(contentBytes);
 
     // Local file header
     const localHeader = new Uint8Array([
-      ...localHeaderSignature, // Local file header signature
+      ...localHeaderSignature, // Signature
       0x14, 0x00, // Version needed to extract
       0x00, 0x00, // General purpose bit flag
-      0x00, 0x00, // Compression method (no compression)
-      0x00, 0x00, // File last modification time
-      0x00, 0x00, // File last modification date
-      0x00, 0x00, 0x00, 0x00, // CRC-32 (not implemented here)
-      contentBytes.length & 0xff, (contentBytes.length >> 8) & 0xff, 0x00, 0x00, // Compressed size
-      contentBytes.length & 0xff, (contentBytes.length >> 8) & 0xff, 0x00, 0x00, // Uncompressed size
+      0x00, 0x00, // Compression method (none)
+      0x00, 0x00, // Last mod time
+      0x00, 0x00, // Last mod date
+      crc32 & 0xff, (crc32 >> 8) & 0xff, (crc32 >> 16) & 0xff, (crc32 >> 24) & 0xff, // CRC-32
+      contentBytes.length & 0xff, (contentBytes.length >> 8) & 0xff, (contentBytes.length >> 16) & 0xff, (contentBytes.length >> 24) & 0xff, // Compressed size
+      contentBytes.length & 0xff, (contentBytes.length >> 8) & 0xff, (contentBytes.length >> 16) & 0xff, (contentBytes.length >> 24) & 0xff, // Uncompressed size
       nameBytes.length & 0xff, (nameBytes.length >> 8) & 0xff, // File name length
       0x00, 0x00, // Extra field length
     ]);
 
-    // Append the local file header, filename, and content
     chunks.push(localHeader, nameBytes, contentBytes);
 
     // Central directory header
     const centralHeader = new Uint8Array([
-      ...centralHeaderSignature, // Central directory file header signature
+      ...centralHeaderSignature, // Signature
       0x14, 0x00, // Version made by
       0x14, 0x00, // Version needed to extract
       0x00, 0x00, // General purpose bit flag
-      0x00, 0x00, // Compression method (no compression)
-      0x00, 0x00, // File last modification time
-      0x00, 0x00, // File last modification date
-      0x00, 0x00, 0x00, 0x00, // CRC-32 (not implemented here)
-      contentBytes.length & 0xff, (contentBytes.length >> 8) & 0xff, 0x00, 0x00, // Compressed size
-      contentBytes.length & 0xff, (contentBytes.length >> 8) & 0xff, 0x00, 0x00, // Uncompressed size
+      0x00, 0x00, // Compression method (none)
+      0x00, 0x00, // Last mod time
+      0x00, 0x00, // Last mod date
+      crc32 & 0xff, (crc32 >> 8) & 0xff, (crc32 >> 16) & 0xff, (crc32 >> 24) & 0xff, // CRC-32
+      contentBytes.length & 0xff, (contentBytes.length >> 8) & 0xff, (contentBytes.length >> 16) & 0xff, (contentBytes.length >> 24) & 0xff, // Compressed size
+      contentBytes.length & 0xff, (contentBytes.length >> 8) & 0xff, (contentBytes.length >> 16) & 0xff, (contentBytes.length >> 24) & 0xff, // Uncompressed size
       nameBytes.length & 0xff, (nameBytes.length >> 8) & 0xff, // File name length
       0x00, 0x00, // Extra field length
       0x00, 0x00, // File comment length
       0x00, 0x00, // Disk number start
       0x00, 0x00, // Internal file attributes
       0x00, 0x00, 0x00, 0x00, // External file attributes
-      offset & 0xff, (offset >> 8) & 0xff, (offset >> 16) & 0xff, (offset >> 24) & 0xff, // Relative offset of local header
+      offset & 0xff, (offset >> 8) & 0xff, (offset >> 16) & 0xff, (offset >> 24) & 0xff, // Offset of local header
     ]);
 
-    // Append the central directory header and filename
     centralDirectory.push(centralHeader, nameBytes);
     offset += localHeader.length + nameBytes.length + contentBytes.length;
   });
 
   // End of central directory
+  const centralDirectorySize = centralDirectory.reduce((sum, part) => sum + part.length, 0);
   const endOfCentralDir = new Uint8Array([
-    ...endOfCentralDirSignature, // End of central directory signature
+    ...endOfCentralDirSignature, // Signature
     0x00, 0x00, // Number of this disk
     0x00, 0x00, // Disk where central directory starts
     files.length & 0xff, (files.length >> 8) & 0xff, // Number of central directory records on this disk
     files.length & 0xff, (files.length >> 8) & 0xff, // Total number of central directory records
-    centralDirectory.reduce((sum, chunk) => sum + chunk.length, 0) & 0xff, 0x00, 0x00, 0x00, // Size of central directory
+    centralDirectorySize & 0xff, (centralDirectorySize >> 8) & 0xff, (centralDirectorySize >> 16) & 0xff, (centralDirectorySize >> 24) & 0xff, // Central directory size
     offset & 0xff, (offset >> 8) & 0xff, (offset >> 16) & 0xff, (offset >> 24) & 0xff, // Offset of start of central directory
     0x00, 0x00, // Comment length
   ]);
 
-  // Combine all parts into a single blob
+  // Combine all parts into a Blob
   return new Blob([...chunks, ...centralDirectory, endOfCentralDir], { type: 'application/zip' });
 }
 
-// Example Usage
+// Example usage with binary data (Excel file)
 (async () => {
+  const response = await fetch('path/to/your/excel.xlsx');
+  const binaryContent = new Uint8Array(await response.arrayBuffer());
+
   const files = [
-    { name: 'file1.txt', content: 'Hello, world!' },
-    { name: 'file2.csv', content: 'Name,Age\nAlice,30\nBob,25' },
+    { name: 'document.txt', content: 'This is a text file.' },
+    { name: 'spreadsheet.xlsx', content: binaryContent },
   ];
 
   const zipBlob = createZip(files);
@@ -85,7 +99,7 @@ function createZip(files) {
   const url = URL.createObjectURL(zipBlob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'files.zip';
+  link.download = 'archive.zip';
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
